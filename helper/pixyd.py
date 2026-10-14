@@ -57,9 +57,43 @@ def snake(name):
     return out.strip("_")
 
 
+# Câmeras com o HID do fabricante (as homologadas): só nelas o helper manda relatórios HID.
+HID_MODELS = {("328f", "00c0")}  # EMEET PIXY
+selected = None  # /dev/v4l/by-id/... escolhido no app; None = a PIXY, ou a primeira câmera
+
+
+def by_id_cameras():
+    return sorted(glob.glob("/dev/v4l/by-id/*-video-index0"))
+
+
 def find_video():
-    hits = sorted(glob.glob("/dev/v4l/by-id/*EMEET_PIXY*-video-index0"))
+    if selected:
+        return os.path.realpath(selected) if os.path.exists(selected) else None  # escolhida, mas desconectada
+    hits = [p for p in by_id_cameras() if "EMEET_PIXY" in p] or by_id_cameras()
     return os.path.realpath(hits[0]) if hits else None
+
+
+def usb_device(dev):
+    """Pasta sysfs do aparelho USB de um /dev/videoN (onde ficam idVendor, bcdDevice...)."""
+    if not dev:
+        return None
+    path = os.path.realpath(f"/sys/class/video4linux/{os.path.basename(dev)}/device")
+    while path != "/" and not os.path.exists(os.path.join(path, "idVendor")):
+        path = os.path.dirname(path)
+    return None if path == "/" else path
+
+
+def usb_attr(usb, name, default=""):
+    try:
+        with open(os.path.join(usb, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def has_vendor_hid(dev=None):
+    usb = usb_device(dev or find_video())
+    return bool(usb) and (usb_attr(usb, "idVendor"), usb_attr(usb, "idProduct")) in HID_MODELS
 
 
 def device_id():
@@ -83,17 +117,13 @@ def device_id():
 
 
 def video_modes():
-    """Modos MJPEG que a PIXY anuncia (resolução e fps), pelo nó do PipeWire: é por ele
-    que o preview e o blur abrem a câmera."""
+    """Modos MJPEG que a câmera selecionada anuncia (resolução e fps), pelo nó do PipeWire:
+    é por ele que o preview e o blur abrem a câmera."""
     raw = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=10).stdout.strip()
     objs = json.JSONDecoder().raw_decode(raw)[0] if raw else []
-    def physical(o):
-        p = (o.get("info") or {}).get("props") or {}
-        desc = p.get("node.description", "")
-        # as câmeras virtuais (a deste app e loopbacks de retransmissão) também têm PIXY no nome
-        return (p.get("media.class") == "Video/Source" and desc.startswith("EMEET PIXY")
-                and not any(w in desc.lower() for w in ("remota", "virtual", "blur")))
-    node = next((o for o in objs if physical(o)), None)
+    dev = find_video()
+    node = next((o for o in objs if ((o.get("info") or {}).get("props") or {}).get("api.v4l2.path") == dev
+                 and ((o.get("info") or {}).get("props") or {}).get("media.class") == "Video/Source"), None)
     if not node:
         return []
     txt = subprocess.run(["pw-cli", "enum-params", str(node["id"]), "EnumFormat"], capture_output=True, text=True, timeout=10).stdout
@@ -115,43 +145,49 @@ def parse_enum_format(txt):
     return [{"width": w, "height": h, "fps": sorted(f, reverse=True)} for (w, h), f in sorted(modes.items(), key=lambda m: -m[0][0] * m[0][1])]
 
 
+def card_name(dev):
+    """Nome que o PipeWire/Chromium mostra: o do V4L2 até o ":" ("EMEET PIXY: EMEET PIXY")."""
+    try:
+        with open(f"/sys/class/video4linux/{os.path.basename(dev)}/name") as f:
+            return f.read().split(":")[0].strip()
+    except OSError:
+        return ""
+
+
 def usb_cameras():
-    """Câmeras USB conectadas (uma por aparelho, não por /dev/video), com o que identifica
-    o modelo: vendor:product, nome e versão de firmware (bcdDevice)."""
-    found = {}
-    for d in sorted(glob.glob("/sys/class/video4linux/video*")):
-        path = os.path.realpath(os.path.join(d, "device"))
-        while path != "/" and not os.path.exists(os.path.join(path, "idVendor")):
-            path = os.path.dirname(path)
-        if path == "/" or path in found:
-            continue  # loopback (sem USB) ou outra interface do mesmo aparelho
-
-        def attr(name, default=""):
-            try:
-                with open(os.path.join(path, name)) as f:
-                    return f.read().strip()
-            except OSError:
-                return default
-
-        bcd = attr("bcdDevice", "0000")
-        found[path] = {
-            "name": attr("product") or open(os.path.join(d, "name")).read().strip(),
-            "vendor": attr("idVendor"),
-            "product": attr("idProduct"),
+    """Câmeras USB conectadas, uma por aparelho (o by-id index0), com o que identifica o
+    modelo: vendor:product, nome, firmware (bcdDevice) e qual está selecionada."""
+    current = find_video()
+    out = []
+    for by_id in by_id_cameras():
+        dev = os.path.realpath(by_id)
+        usb = usb_device(dev)
+        if not usb:
+            continue  # loopback, sem aparelho USB
+        bcd = usb_attr(usb, "bcdDevice", "0000")
+        out.append({
+            "id": by_id,
+            "name": usb_attr(usb, "product") or card_name(dev),
+            "card": card_name(dev),
+            "vendor": usb_attr(usb, "idVendor"),
+            "product": usb_attr(usb, "idProduct"),
             "firmware": f"{int(bcd[:2], 16):x}.{bcd[2:]}" if len(bcd) == 4 else bcd,
-            "device": "/dev/" + os.path.basename(d),
-        }
-    return list(found.values())
+            "device": dev,
+            "vendor_hid": has_vendor_hid(dev),
+            "selected": dev == current,
+        })
+    return out
 
 
 def find_hidraw():
+    """HID do fabricante da câmera SELECIONADA: só se ela for de um modelo com HID e o
+    hidraw for do mesmo aparelho USB (nunca o de outra câmera conectada)."""
+    dev = find_video()
+    if not has_vendor_hid(dev):
+        return None
+    usb = usb_device(dev)
     for path in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
-        try:
-            with open(os.path.join(path, "device/uevent")) as f:
-                uevent = f.read()
-        except OSError:
-            continue
-        if "EMEET" in uevent and "PIXY" in uevent:
+        if os.path.realpath(os.path.join(path, "device")).startswith(usb + "/"):
             return "/dev/" + os.path.basename(path)
     return None
 
@@ -288,7 +324,7 @@ class Hid:
             return
         dev = find_hidraw()
         if not dev:
-            raise RuntimeError("HID da PIXY não encontrado")
+            raise RuntimeError("a câmera selecionada não tem os controles do fabricante (HID)")
         try:
             self.fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
         except PermissionError:
@@ -383,6 +419,14 @@ def set_and_read(set_frame, get_frame):
     return hid.query(get_frame)
 
 
+def position(axis):
+    """Posição em graus: o motor da PIXY pelo HID, ou o controle UVC absoluto (arcseg)."""
+    if has_vendor_hid():
+        return motor_pos(axis)
+    name = f"{axis}_absolute"
+    return cam.get(name) / ARCSEC if name in cam.by_name else None
+
+
 def motor_pos(axis):
     p = hid.query(frame(GET_MOTOR_POS, [AXES[axis]]))
     if not p or len(p) < 9:
@@ -410,13 +454,17 @@ class Jog:
         self.base_speed = 60.0
         self.axes = {"pan": {"dir": 0, "speed": 0.0}, "tilt": {"dir": 0, "speed": 0.0}}
         self.last = 0.0
+        self.generic_pos = {}
 
     @property
     def moving(self):
         return any(a["dir"] for a in self.axes.values())
 
     def update(self, pan, tilt, max_speed):
-        self.last = time.monotonic()
+        now = time.monotonic()
+        if not has_vendor_hid():
+            return self._generic(now, pan, tilt, max_speed)
+        self.last = now
         for axis, v in (("pan", pan), ("tilt", tilt)):
             v = max(-1.0, min(1.0, float(v)))
             if abs(v) < 0.05:
@@ -449,12 +497,36 @@ class Jog:
         hid.send(frame(SET_MOTOR_SPEED, [AXES[axis], *struct.pack("<f", self.base_speed)]))
         st.update(dir=0, speed=0.0)
 
+    def _generic(self, now, pan, tilt, max_speed):
+        """Câmera sem o motor da PIXY: anda por posição absoluta UVC (pan/tilt_absolute,
+        em segundos de arco), em passos proporcionais ao tempo desde o comando anterior."""
+        dt = min(now - self.last, 0.2) if self.last else 0.05
+        self.last = now
+        for axis, v in (("pan", pan), ("tilt", tilt)):
+            name = f"{axis}_absolute"
+            c = cam.by_name.get(name)
+            v = max(-1.0, min(1.0, float(v)))
+            if not c or abs(v) < 0.05:
+                self.generic_pos.pop(axis, None)
+                continue
+            pos = self.generic_pos.get(axis)
+            if pos is None:
+                pos = cam.get(name)
+            pos += (1 if v > 0 else -1) * v * v * max_speed * ARCSEC * dt
+            pos = max(c["min"], min(c["max"], pos))
+            self.generic_pos[axis] = pos
+            step = c["step"] or 1
+            cam.set(name, int(round(pos / step) * step))
+
     def stop(self):
+        self.generic_pos.clear()
+        if not has_vendor_hid():
+            return
         for axis in self.axes:
             self._stop(axis)
 
     def tick(self):
-        if self.moving and time.monotonic() - self.last > self.WATCHDOG:
+        if self.moving and has_vendor_hid() and time.monotonic() - self.last > self.WATCHDOG:
             self.stop()
 
 
@@ -502,8 +574,10 @@ def diagnose():
         item(tool, shutil.which(tool), "" if shutil.which(tool) else "não encontrado no PATH")
 
     video, hid_dev = find_video(), find_hidraw()
-    item("camera", video, video or "EMEET PIXY não conectada")
-    if hid_dev:
+    item("camera", video, video or "câmera não conectada")
+    if video and not has_vendor_hid(video):
+        item("hid", True)  # câmera sem o HID do fabricante: nada a configurar
+    elif hid_dev:
         item("hid", os.access(hid_dev, os.R_OK | os.W_OK), "" if os.access(hid_dev, os.R_OK | os.W_OK) else f"sem permissão em {hid_dev} (regra udev)")
     else:
         item("hid", not video, "" if not video else "HID da câmera não apareceu")
@@ -526,7 +600,12 @@ def diagnose():
 def handle(req):
     op = req.get("op")
     if op == "status":
-        return {"video": find_video(), "hid": find_hidraw(), "device": device_id()}
+        return {"video": find_video(), "hid": find_hidraw(), "device": device_id(), "vendor_hid": has_vendor_hid()}
+    if op == "select":
+        global selected
+        selected = req.get("camera") or None  # não "id": esse é o número da requisição
+        reset_on_error()  # fecha os devices da câmera anterior
+        return {"video": find_video(), "hid": find_hidraw(), "device": device_id(), "vendor_hid": has_vendor_hid()}
     if op == "cameras":
         return {"cameras": usb_cameras()}
     if op == "diagnose":
@@ -572,6 +651,9 @@ def handle(req):
         p = set_and_read(frame(SET_PRIVACY_DELAY, list(struct.pack("<I", seconds))), GET_PRIVACY_DELAY)
         return {"privacy_delay": struct.unpack_from("<I", p)[0] if p and len(p) >= 4 else None}
     if op == "speed":
+        if not has_vendor_hid():
+            jog.base_speed = float(req["value"])
+            return {"speed": round(jog.base_speed)}
         jog.base_speed = set_speed(req["value"])
         return {"speed": round(jog.base_speed)}
     if op == "jog":
@@ -579,20 +661,21 @@ def handle(req):
         jog.update(req.get("pan", 0), req.get("tilt", 0), float(req.get("max_speed", jog.base_speed)))
         return {}
     if op == "stop":
+        cam.open()
         jog.stop()
-        return {"pan": motor_pos("pan"), "tilt": motor_pos("tilt")}
+        return {"pan": position("pan"), "tilt": position("tilt")}
     if op == "position":
         cam.open()
-        return {"pan": motor_pos("pan"), "tilt": motor_pos("tilt"), "zoom": cam.get("zoom_absolute")}
+        zoom = cam.get("zoom_absolute") if "zoom_absolute" in cam.by_name else None
+        return {"pan": position("pan"), "tilt": position("tilt"), "zoom": zoom}
     if op == "goto":
         cam.open()
         jog.stop()
         for name in ("pan", "tilt", "zoom"):
-            if req.get(name) is not None:
-                if name == "zoom":
-                    cam.set("zoom_absolute", req[name])
-                else:
-                    cam.set(f"{name}_absolute", round(float(req[name])) * ARCSEC)
+            ctrl = "zoom_absolute" if name == "zoom" else f"{name}_absolute"
+            if req.get(name) is None or ctrl not in cam.by_name:
+                continue  # câmera sem esse eixo
+            cam.set(ctrl, req[name] if name == "zoom" else round(float(req[name])) * ARCSEC)
         return {}
     raise ValueError(f"op desconhecida: {op}")
 

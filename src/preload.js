@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("pixy", {
   getAutostart: () => ipcRenderer.invoke("autostart:get"),
   setAutostart: (on) => ipcRenderer.invoke("autostart:set", on),
   getCameras: () => ipcRenderer.invoke("cameras:get"),
+  selectCamera: (id) => ipcRenderer.invoke("camera:select", id),
   getDiagnosis: () => ipcRenderer.invoke("diagnose:get"),
   runDiagnosis: () => ipcRenderer.invoke("diagnose:run"),
   onDiagnosis: (cb) => ipcRenderer.on("app:diagnose", (_e, d) => cb(d)),

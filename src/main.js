@@ -167,16 +167,33 @@ handle("pixy", async (_e, req) => {
 // A câmera pode esquecer zoom e ajustes ao perder energia ou reiniciar; o app guarda o
 // que foi escolhido na interface e reaplica ao abrir e sempre que ela reaparece no USB.
 const AUTO_FIRST = ["white_balance_automatic", "auto_exposure", "focus_automatic_continuous"];
-const cameraPrefs = () => ({ v4l2: {}, hid: {}, ...readJson("settings.json", {}).camera });
+// Câmera selecionada e o que ela suporta. vendorHid = tem os controles do fabricante
+// (modo, privacidade, tracking, gestos, áudio, motor da PIXY); as outras ficam no básico.
+let camera = { id: null, name: "", card: "", vendorHid: false, status: null, ptz: { pan: false, tilt: false, zoom: false } };
+
+// Preferências por câmera (chave: /dev/v4l/by-id/...). As de antes desta mudança, que
+// eram só da PIXY, migram para ela na primeira vez.
+function storedPrefs(id = camera.id) {
+  const st = readJson("settings.json", {});
+  if (st.cameraPrefs && st.cameraPrefs[id]) return st.cameraPrefs[id];
+  if (st.camera && camera.vendorHid) return st.camera; // legado
+  return null;
+}
+const cameraPrefs = () => ({ v4l2: {}, hid: {}, ...storedPrefs() });
+function writePrefs(prefs) {
+  const st = readJson("settings.json", {});
+  writeJson("settings.json", { ...st, cameraPrefs: { ...st.cameraPrefs, [camera.id]: prefs } });
+}
 
 function rememberPref(req) {
+  if (!camera.id) return;
   const prefs = cameraPrefs();
   if (req.op === "set" && !/^(pan|tilt)_absolute$/.test(req.name)) prefs.v4l2[req.name] = Number(req.value);
   else if (req.op === "goto" && req.zoom != null) prefs.v4l2.zoom_absolute = Math.round(Number(req.zoom));
   else if (req.op === "feature") prefs.hid[req.name] = Boolean(req.value);
   else if (HID_PREF_OPS.has(req.op)) prefs.hid[req.op] = req.value;
   else return;
-  writeJson("settings.json", { ...readJson("settings.json", {}), camera: prefs });
+  writePrefs(prefs);
 }
 
 // Primeira execução com esta função: o que está na câmera agora vira a referência.
@@ -185,17 +202,20 @@ async function snapshotCameraPrefs(controls) {
   for (const c of controls) {
     if (!c.readonly && !/^(pan|tilt)_absolute$|^zoom_continuous$/.test(c.name) && c.value != null) v4l2[c.name] = c.value;
   }
-  const st = await call({ op: "state" }).catch(() => ({}));
+  const st = camera.vendorHid ? await call({ op: "state" }).catch(() => ({})) : {};
   const hid = {};
   for (const k of ["gesture", "audio", "target", "privacy_delay", "hflip", "vflip", "autorotate"]) if (st[k] != null) hid[k] = st[k];
-  writeJson("settings.json", { ...readJson("settings.json", {}), camera: { v4l2, hid } });
-  logLine("prefs", "primeira execução: ajustes atuais da câmera salvos como preferência");
+  writePrefs({ v4l2, hid });
+  logLine("prefs", `${camera.name}: ajustes atuais salvos como preferência (primeira vez com esta câmera)`);
 }
 
 async function applyCameraPrefs() {
   await call({ op: "reopen" });
   const { controls } = await call({ op: "list" });
-  if (!readJson("settings.json", {}).camera) return snapshotCameraPrefs(controls);
+  const names0 = new Set(controls.map((c) => c.name));
+  camera.ptz = { pan: names0.has("pan_absolute"), tilt: names0.has("tilt_absolute"), zoom: names0.has("zoom_absolute") };
+  pushState();
+  if (!storedPrefs()) return snapshotCameraPrefs(controls);
   const prefs = cameraPrefs();
   const applied = [];
   const applyV4l2 = async (list, names) => {
@@ -216,8 +236,8 @@ async function applyCameraPrefs() {
   const names = Object.keys(prefs.v4l2);
   await applyV4l2(controls, names.filter((n) => AUTO_FIRST.includes(n)));
   await applyV4l2((await call({ op: "list" })).controls, names.filter((n) => !AUTO_FIRST.includes(n)));
-  const state = await call({ op: "state" }).catch(() => ({}));
-  for (const [key, value] of Object.entries(prefs.hid)) {
+  const state = camera.vendorHid ? await call({ op: "state" }).catch(() => ({})) : {};
+  for (const [key, value] of Object.entries(camera.vendorHid ? prefs.hid : {})) {
     if (state[key] === value) continue;
     const req = ["hflip", "vflip", "autorotate"].includes(key) ? { op: "feature", name: key, value } : { op: key, value };
     try {
@@ -232,10 +252,32 @@ async function applyCameraPrefs() {
   if (win && !win.isDestroyed()) win.webContents.send("app:camera-reset");
 }
 
+// Depois de trocar de câmera: reaplica as preferências dela (fora da vigia, que pularia
+// porque a troca está em andamento).
+async function applyAfterSelect() {
+  try {
+    cameraId = (await call({ op: "status" })).device;
+    applyingPrefs = true;
+    await applyCameraPrefs();
+  } catch (e) {
+    cameraId = undefined; // a vigia tenta de novo
+    logLine("prefs", `falhou: ${e.message}`);
+  } finally {
+    applyingPrefs = false;
+  }
+}
+
 // Câmera sumiu e voltou (identidade USB nova) ou o app acabou de abrir: reaplica.
 let cameraId; // undefined = ainda não vista
 let applyingPrefs = false;
 async function watchCamera() {
+  // A câmera escolhida voltou a ser conectada: volta a usá-la. Na fila das trocas, e
+  // conferindo a escolha de novo lá dentro: se o usuário trocou nesse meio-tempo, vale a dele.
+  const wanted = readJson("settings.json", {}).selectedCamera;
+  if (wanted && wanted !== camera.id && fs.existsSync(wanted) && !applyingPrefs && !selecting) {
+    await selectCamera(wanted, false, true).catch(() => {});
+    return;
+  }
   let id = null;
   try {
     id = (await call({ op: "status" })).device;
@@ -256,6 +298,51 @@ async function watchCamera() {
   }
 }
 
+// Lê qual câmera o helper está usando e o que ela é (nome, homologação, HID).
+async function refreshCamera() {
+  const st = await call({ op: "status" });
+  const list = classify((await call({ op: "cameras" })).cameras);
+  const c = list.find((x) => x.device === st.video);
+  camera = c
+    ? { ...camera, id: c.id, name: c.name, card: c.card, vendorHid: Boolean(st.vendor_hid), status: c.status }
+    : { ...camera, id: null, name: "", card: "", vendorHid: false, status: null };
+  pushState();
+  return camera;
+}
+
+// Troca a câmera: o helper passa a usá-la, a câmera virtual reabre com ela e as
+// preferências dela são reaplicadas (ou salvas, na primeira vez).
+let selectQueue = Promise.resolve();
+let selecting = false;
+function selectCamera(id, save = true, onlyIfStillWanted = false) {
+  const run = selectQueue.then(async () => {
+    if (onlyIfStillWanted && readJson("settings.json", {}).selectedCamera !== id) return appState();
+    selecting = true;
+    try {
+      return await doSelectCamera(id, save);
+    } finally {
+      selecting = false;
+    }
+  });
+  selectQueue = run.catch(() => {});
+  return run;
+}
+
+async function doSelectCamera(id, save) {
+  if (save) writeJson("settings.json", { ...readJson("settings.json", {}), selectedCamera: id || null });
+  await call({ op: "select", camera: id && fs.existsSync(id) ? id : null });
+  real = null;
+  cameraId = undefined; // força o watchCamera a reaplicar as preferências
+  await refreshCamera();
+  await ensureVideoForCamera();
+  logLine("camera", `selecionada: ${camera.name || "nenhuma"} (${camera.status || "-"})`);
+  if (virtualWanted) restartVirtual();
+  await applyAfterSelect();
+  runDiagnose().catch(() => {});
+  return appState();
+}
+handle("camera:select", (_e, id) => selectCamera(id));
+
 // --- Modo da câmera: o que ela diz e o que o usuário quer ----------------------------
 // A PIXY só tem modo de verdade enquanto algum app transmite: ociosa ela responde 03
 // ("standby") e ignora pedidos de tracking, e ao acordar volta sempre para standard.
@@ -267,7 +354,7 @@ const streaming = (m) => m === "standard" || m === "tracking";
 const isTracking = () => desired === "tracking" && real !== "privacy";
 
 function appState() {
-  return { mode: real, desired, idle: real === "standby", blur: blurState, blurConfig: blurConfig(), video: videoConfig() };
+  return { mode: real, desired, idle: real === "standby", blur: blurState, blurConfig: blurConfig(), video: videoConfig(), camera };
 }
 
 function pushState() {
@@ -357,8 +444,16 @@ function applyMode(mode, notify = false) {
   return run;
 }
 // Privacidade alterna e devolve o modo de antes (standard ou tracking).
-const togglePrivacy = (notify) => applyMode(() => (real === "privacy" ? desired : "privacy"), notify);
-const toggleTracking = (notify) => applyMode(() => (desired === "tracking" && real !== "privacy" ? "standard" : "tracking"), notify);
+// Câmera sem os controles do fabricante: os atalhos só avisam.
+function needsVendorHid(notify) {
+  if (camera.vendorHid) return false;
+  if (notify) notify(`A câmera selecionada (${camera.name || "nenhuma"}) não tem esse controle.`);
+  return true;
+}
+const togglePrivacy = (notify) =>
+  needsVendorHid(notify) ? Promise.resolve(appState()) : applyMode(() => (real === "privacy" ? desired : "privacy"), notify);
+const toggleTracking = (notify) =>
+  needsVendorHid(notify) ? Promise.resolve(appState()) : applyMode(() => (desired === "tracking" && real !== "privacy" ? "standard" : "tracking"), notify);
 
 handle("app:mode", (_e, mode) => applyMode(mode));
 handle("app:toggle", (_e, what) => (what === "privacy" ? togglePrivacy(false) : toggleTracking(false)));
@@ -429,7 +524,28 @@ handle("camera:holders", () => whoHoldsCamera());
 // Meet e afins perderem a câmera.
 // Qualidade do vídeo (preview e blur): modo nativo da câmera, escolhido no app.
 const VIDEO_DEFAULT = { width: 1280, height: 720, fps: 30 };
-const videoConfig = () => ({ ...VIDEO_DEFAULT, ...readJson("settings.json", {}).video });
+// Por câmera: cada uma tem os seus modos (a integrada de um notebook pode ir só até 720p30).
+const videoConfig = () => {
+  const st = readJson("settings.json", {});
+  return { ...VIDEO_DEFAULT, ...((st.videoByCamera || {})[camera.id] || (camera.vendorHid ? st.video : null)) };
+};
+function saveVideo(v) {
+  const st = readJson("settings.json", {});
+  writeJson("settings.json", { ...st, videoByCamera: { ...st.videoByCamera, [camera.id]: v } });
+}
+// Primeira vez com uma câmera: 1280x720 se ela tiver (16:9, leve, bom para chamada); senão o
+// maior modo até 1920x1080; 30 fps se houver.
+async function ensureVideoForCamera() {
+  const st = readJson("settings.json", {});
+  if (!camera.id || (st.videoByCamera || {})[camera.id] || (camera.vendorHid && st.video)) return;
+  const { modes } = await call({ op: "modes" }).catch(() => ({ modes: [] }));
+  if (!modes.length) return;
+  const fit = modes.filter((m) => m.width * m.height <= 1920 * 1080);
+  const m = modes.find((x) => x.width === 1280 && x.height === 720) || fit[0] || modes[modes.length - 1];
+  const v = { width: m.width, height: m.height, fps: m.fps.includes(30) ? 30 : Math.max(...m.fps) };
+  saveVideo(v);
+  logLine("video", `${camera.name}: modo inicial ${v.width}x${v.height}@${v.fps}`);
+}
 // Saída da câmera virtual: o modo escolhido, limitado a 1920x1080 (4K com blur não
 // cabe no orçamento de um quadro) e com lados múltiplos de 4 (exigência da conversão I420).
 function blurOutput(v = videoConfig()) {
@@ -491,11 +607,13 @@ function startFfmpeg() {
   });
   ffmpeg.stderr.on("data", (d) => (err += d));
   ffmpeg.stdin.on("error", () => {});
+  const proc = ffmpeg;
   ffmpeg.on("exit", (code) => {
+    if (ffmpeg !== proc) return; // um ffmpeg antigo saindo depois que o novo já subiu
     clearMarker();
     ffmpeg = null;
     ffmpegBusy = false;
-    if (virtualWanted && code) setBlurState({ running: false, error: `ffmpeg: ${err.trim().split("\n").pop() || code}` });
+    if (virtualWanted && code && !proc.intentional) setBlurState({ running: false, error: `ffmpeg: ${err.trim().split("\n").pop() || code}` });
   });
 }
 
@@ -523,8 +641,8 @@ handle("video:get", async () => {
 handle("video:set", async (_e, v) => {
   const next = { width: Math.round(+v.width), height: Math.round(+v.height), fps: Math.round(+v.fps) };
   if (!(next.width > 0 && next.height > 0 && next.fps > 0)) throw new Error("modo inválido");
-  writeJson("settings.json", { ...readJson("settings.json", {}), video: next });
-  logLine("video", `modo: ${next.width}x${next.height}@${next.fps}`);
+  saveVideo(next);
+  logLine("video", `${camera.name}: modo ${next.width}x${next.height}@${next.fps}`);
   // A câmera virtual abriu a câmera e o v4l2loopback no tamanho antigo: reabre os dois.
   restartVirtual();
   pushState();
@@ -581,7 +699,8 @@ function startVirtual() {
   logConsole("blur", blurWin.webContents);
   const v = videoConfig();
   const o = blurOutput(v);
-  blurWin.loadURL(`app://pixy/src/blur.html?cw=${v.width}&ch=${v.height}&fps=${v.fps}&w=${o.width}&h=${o.height}`);
+  const card = encodeURIComponent(camera.card || "EMEET PIXY");
+  blurWin.loadURL(`app://pixy/src/blur.html?cw=${v.width}&ch=${v.height}&fps=${v.fps}&w=${o.width}&h=${o.height}&card=${card}`);
   const w = blurWin;
   w.on("closed", () => {
     if (blurWin === w) blurWin = null; // uma janela antiga fechando não apaga a nova
@@ -594,18 +713,27 @@ function stopVirtual() {
   clearTimeout(blurRetry);
   if (blurWin) blurWin.destroy();
   blurWin = null;
-  if (ffmpeg) {
-    ffmpeg.stdin.end();
-    ffmpeg.kill();
-  }
+  stopFfmpeg();
   setBlurState({ running: false, fps: null });
 }
 
 function restartVirtual() {
   if (blurWin) blurWin.destroy();
   blurWin = null;
-  if (ffmpeg) ffmpeg.kill();
+  stopFfmpeg();
   startVirtual();
+}
+
+// Encerra o ffmpeg de propósito: a saída dele (código 255 no SIGTERM) não é erro.
+function stopFfmpeg() {
+  if (!ffmpeg) return;
+  const proc = ffmpeg;
+  proc.intentional = true;
+  ffmpeg = null; // o próximo quadro já sobe um ffmpeg novo, sem esperar este sair
+  ffmpegBusy = false;
+  clearMarker();
+  proc.stdin.end();
+  proc.kill();
 }
 
 // Liga/desliga só o efeito: a câmera virtual continua no ar, sem trocar de imagem
@@ -960,9 +1088,17 @@ app.whenReady().then(async () => {
   shortcuts.ensureDefaults().catch((e) => logLine("atalhos", e.message)).finally(() => loadShortcuts().catch(() => {}));
 
   desired = readJson("settings.json", {}).desired === "tracking" ? "tracking" : "standard";
+  try {
+    const saved = readJson("settings.json", {}).selectedCamera;
+    await call({ op: "select", camera: saved && fs.existsSync(saved) ? saved : null });
+    await refreshCamera();
+    await ensureVideoForCamera();
+  } catch (e) {
+    logLine("camera", `seleção inicial: ${e.message}`);
+  }
   // Lê o modo a cada 2 s: pega o vídeo abrindo (para reaplicar o tracking) e
   // mudanças feitas fora do app, como gestos.
-  const poll = () => call({ op: "mode" }).then((s) => onReadback(s.mode)).catch(() => {});
+  const poll = () => (camera.vendorHid ? call({ op: "mode" }).then((s) => onReadback(s.mode)).catch(() => {}) : Promise.resolve());
   await poll();
   setInterval(poll, 2000);
   watchCamera();

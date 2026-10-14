@@ -208,3 +208,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .cams .tag.homologada { background: rgba(76,195,138,.18); color: var(--ok); }
 .cams .tag.firmware-nao-testado { background: rgba(242,184,75,.15); color: var(--warn); }
 .cams .tag.nao-suportada { background: rgba(138,144,155,.15); color: var(--muted); }
+
+/* O que a câmera selecionada não suporta fica visível, mas apagado e sem resposta */
+.unsupported { opacity: .38; pointer-events: none; filter: grayscale(.6); }
+.off-note { margin: -2px 0 10px 0; color: var(--warn); }
+.cams li { cursor: pointer; }
+.cams li:hover { border-color: #3a4049; }
+.cams li.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.mode-off { color: var(--muted); font-size: 12px; }

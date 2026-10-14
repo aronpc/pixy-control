@@ -4,7 +4,7 @@ App para Linux que controla a webcam **EMEET PIXY**: privacidade, tracking, gest
 
 ## Câmeras homologadas
 
-Modelos testados com o app. Com qualquer outra câmera o app mostra "não suportada" na seção **Geral** e não tenta controlá-la.
+Modelos testados com o app. **Outras webcams funcionam no básico**: escolha a câmera em **Geral → Câmeras conectadas** e o app usa os controles padrão (UVC/V4L2): imagem, zoom e pan/tilt quando a câmera tiver, preview, resolução e FPS, e a câmera virtual com fundo desfocado. O que depende dos controles do fabricante (modo, privacidade, tracking, gestos, áudio) fica desativado na interface, com o motivo. Preferências, resolução e FPS são guardados por câmera.
 
 | Câmera | USB | Firmware | Testado em | O que funciona |
 | --- | --- | --- | --- | --- |

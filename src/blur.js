@@ -166,23 +166,36 @@ class I420Reader {
   }
 }
 
-async function findPixy() {
-  const pick = (list) => list.find((d) => d.kind === "videoinput" && /PIXY/i.test(d.label) && !/remota|blur|virtual/i.test(d.label));
-  let dev = pick(await navigator.mediaDevices.enumerateDevices());
+const CARD = q.get("card") || "EMEET PIXY"; // nome da câmera selecionada no app
+
+// Escolhe a câmera pelo nome que o Chromium mostra ("<nome> (V4L2)"). Câmeras com dois
+// sensores de mesmo nome (webcams de notebook: o comum e o infravermelho) ficam com o de
+// maior resolução, que é o comum.
+async function pickCamera(list) {
+  const matches = list.filter((d) => d.kind === "videoinput" && d.label.startsWith(CARD) && !/remota|blur|virtual/i.test(d.label));
+  if (matches.length < 2) return matches[0];
+  const width = (d) => {
+    const cap = typeof d.getCapabilities === "function" ? d.getCapabilities() : null;
+    return (cap && cap.width && cap.width.max) || 0;
+  };
+  return matches.sort((a, b) => width(b) - width(a))[0];
+}
+
+async function findCamera() {
+  let dev = await pickCamera(await navigator.mediaDevices.enumerateDevices());
   if (!dev) {
     // Rótulos só aparecem depois de uma permissão concedida. A sondagem já pede 720p:
-    // se a câmera padrão for a PIXY, o formato aberto aqui é reaproveitado pelo pedido
-    // seguinte, e o padrão dela (1280x960) só rende ~20 fps.
+    // se a câmera padrão for a selecionada, o formato aberto aqui é reaproveitado.
     const probe = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: CW }, height: { ideal: CH } } });
     probe.getTracks().forEach((t) => t.stop());
-    dev = pick(await navigator.mediaDevices.enumerateDevices());
+    dev = await pickCamera(await navigator.mediaDevices.enumerateDevices());
   }
-  if (!dev) throw new Error("PIXY não aparece na lista de câmeras");
+  if (!dev) throw new Error(`${CARD} não aparece na lista de câmeras`);
   return dev;
 }
 
 async function openCamera() {
-  const dev = await findPixy();
+  const dev = await findCamera();
   return navigator.mediaDevices.getUserMedia({
     // Modo nativo exato, sem recorte nem redimensionamento: com "ideal" + fps o Chromium
     // escolhia o 1280x960 da PIXY e recortava, e esse modo só rende ~20 fps.

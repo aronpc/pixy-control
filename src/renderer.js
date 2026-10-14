@@ -51,8 +51,35 @@ function toast(msg) {
 let app = { mode: null, desired: "standard", idle: false };
 const trackingOn = () => app.desired === "tracking" && app.mode !== "privacy";
 
+// O que a câmera selecionada suporta: o resto fica apagado, com o motivo.
+function applyCapabilities() {
+  const cam = app.camera || {};
+  const hid = Boolean(cam.vendorHid);
+  const ptz = cam.ptz || {};
+  const move = Boolean(ptz.pan || ptz.tilt);
+  for (const b of $("modes").children) {
+    b.disabled = !hid;
+    b.title = hid ? "" : "Só nas câmeras homologadas";
+  }
+  $("vendorSection").classList.toggle("unsupported", !hid);
+  $("vendorNote").hidden = hid;
+  $("vendorNote").classList.toggle("unsupported", false);
+  for (const el of $("vendorSection").querySelectorAll("input, select")) el.disabled = !hid;
+  for (const id of ["joy", "map", "presets", "center", "speed"]) $(id).classList.toggle("unsupported", !move);
+  $("speed").disabled = !move;
+  $("zoom").disabled = !ptz.zoom;
+  $("zoom").closest("label").classList.toggle("unsupported", !ptz.zoom);
+  $("joy").title = move ? "" : "A câmera selecionada não tem pan/tilt";
+}
+
 function showMode(s) {
   app = { ...app, ...s };
+  applyCapabilities();
+  if (app.camera && !app.camera.vendorHid) {
+    for (const b of $("modes").children) b.classList.remove("on");
+    $("modeNote").textContent = app.camera.name ? `${app.camera.name}: modo, privacidade e tracking só nas câmeras homologadas.` : "";
+    return;
+  }
   const active = app.mode === "privacy" ? "privacy" : app.desired;
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === active);
   $("modeNote").textContent = app.mode === "privacy"
@@ -282,6 +309,8 @@ function keyVector() {
 let wasMoving = false;
 let jogsSinceMove = 0;
 setInterval(() => {
+  const ptz = (app.camera && app.camera.ptz) || {};
+  if (!ptz.pan && !ptz.tilt) return; // câmera sem pan/tilt
   let [x, y] = joy.active ? [joy.x, joy.y] : keyVector();
   if (!joy.active && keys.size) drawKnob(x, y);
   const moving = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
@@ -289,7 +318,7 @@ setInterval(() => {
     // y da tela cresce para baixo; tilt positivo é para cima.
     window.pixy.call("jog", { pan: x, tilt: -y, max_speed: maxSpeed }).catch(() => {});
     // Mão no joystick: o tracking brigaria com ele.
-    if (moving && trackingOn() && jogsSinceMove++ === 0) setMode("standard").catch(() => {});
+    if (moving && app.camera && app.camera.vendorHid && trackingOn() && jogsSinceMove++ === 0) setMode("standard").catch(() => {});
   }
   if (!moving) jogsSinceMove = 0;
   wasMoving = moving;
@@ -317,8 +346,10 @@ window.addEventListener("keydown", (e) => {
     case "KeyQ": case "Minus": case "NumpadSubtract": return setZoom(zoom - 2);
     case "KeyE": case "Equal": case "NumpadAdd": return setZoom(zoom + 2);
     case "KeyC": case "Home": return goto({ pan: 0, tilt: 0 });
-    case "KeyT": return window.pixy.toggle("tracking").then(showMode);
-    case "KeyP": return window.pixy.toggle("privacy").then(showMode);
+    case "KeyT":
+    case "KeyP":
+      if (app.camera && !app.camera.vendorHid) return toast("A câmera selecionada não tem esse controle.");
+      return window.pixy.toggle(e.code === "KeyT" ? "tracking" : "privacy").then(showMode);
     case "Space": e.preventDefault(); return call("stop");
   }
 });
@@ -436,7 +467,13 @@ async function openPreview() {
   if (!previewOn || previewSource !== "original") return;
   stopStream();
   try {
-    const pick = (list) => list.find((d) => d.kind === "videoinput" && /PIXY/i.test(d.label) && !/remota|blur|virtual/i.test(d.label));
+    // Câmera selecionada, pelo nome que o Chromium mostra; com dois sensores de mesmo nome
+    // (comum e infravermelho), o de maior resolução.
+    const card = (app.camera && app.camera.card) || "EMEET PIXY";
+    const width = (d) => ((typeof d.getCapabilities === "function" && d.getCapabilities().width) || {}).max || 0;
+    const pick = (list) => list
+      .filter((d) => d.kind === "videoinput" && d.label.startsWith(card) && !/remota|blur|virtual/i.test(d.label))
+      .sort((a, b) => width(b) - width(a))[0];
     let dev = pick(await navigator.mediaDevices.enumerateDevices());
     if (!dev) {
       // Rótulos só aparecem depois de uma permissão. A sondagem já pede 720p: se a câmera
@@ -785,7 +822,7 @@ window.pixy.getShortcuts().then((all) => renderShortcuts(all)).catch(() => {});
 async function refreshAll() {
   try {
     await loadControls();
-    showState(await call("state"));
+    if (app.camera && app.camera.vendorHid) showState(await call("state"));
     await pollPosition();
   } catch {}
 }
@@ -795,8 +832,7 @@ async function refreshAll() {
   renderPresets();
   try {
     const st = await window.pixy.call("status");
-    setConnected(Boolean(st.video && st.hid));
-    if (!st.hid && st.video) toast("HID da PIXY sem permissão: instale udev/70-emeet-pixy.rules");
+    setConnected(Boolean(st.video));
   } catch {
     setConnected(false);
   }
@@ -807,7 +843,7 @@ setInterval(async () => {
   if (connected) return;
   try {
     const st = await window.pixy.call("status");
-    if (st.video && st.hid) setConnected(true);
+    if (st.video) setConnected(true);
   } catch {}
 }, 3000);
 // Iniciar com o sistema: o .desktop em ~/.config/autostart é a própria preferência.
@@ -842,6 +878,20 @@ async function loadCameras() {
   }
   for (const c of cams) {
     const li = document.createElement("li");
+    li.classList.toggle("selected", c.selected);
+    li.addEventListener("click", async () => {
+      if (c.selected) return;
+      li.style.opacity = ".6";
+      try {
+        showMode(await window.pixy.selectCamera(c.id));
+      } catch (e) {
+        toast(`Não consegui trocar de câmera: ${e.message}`);
+      }
+      loadCameras();
+      loadVideo().catch(() => {});
+      refreshAll();
+      if (previewOn && previewSource === "original") openPreview();
+    });
     const tag = document.createElement("span");
     tag.className = `tag ${c.status}`;
     tag.textContent = CAM_STATUS[c.status];
