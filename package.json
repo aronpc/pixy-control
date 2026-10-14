@@ -1,6 +1,6 @@
 {
   "name": "pixy-control",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Controle da webcam EMEET PIXY no Linux: toggles, joystick de PTZ, tray, atalhos globais e câmera virtual com fundo desfocado",
   "main": "src/main.js",
   "private": true,
