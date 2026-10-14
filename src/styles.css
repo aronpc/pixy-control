@@ -212,7 +212,19 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* O que a câmera selecionada não suporta fica visível, mas apagado e sem resposta */
 .unsupported { opacity: .38; pointer-events: none; filter: grayscale(.6); }
 .off-note { margin: -2px 0 10px 0; color: var(--warn); }
-.cams li { cursor: pointer; }
-.cams li:hover { border-color: #3a4049; }
+.cams li .use { float: right; margin-left: 6px; padding: 1px 8px; font-size: 11px; }
 .cams li.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .mode-off { color: var(--muted); font-size: 12px; }
+.zoom-note { margin: -6px 0 0 0; color: var(--warn); }
+
+/* Abas do painel lateral */
+.tabs { display: flex; gap: 2px; margin: -14px -16px 14px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); position: sticky; top: -14px; background: var(--bg); z-index: 1; }
+.tabs button { border: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); padding: 8px 12px; border-bottom: 2px solid transparent; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+.tabs button:hover { color: var(--text); }
+.tab-panel > h2:first-child { margin-top: 0; }
+
+.priv-thumb { position: relative; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #15171c; display: grid; place-items: center; margin-bottom: 8px; }
+.priv-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.priv-thumb span { color: var(--muted); font-size: 12px; }
+.priv-actions { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }

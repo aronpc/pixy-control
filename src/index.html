@@ -42,6 +42,7 @@
           <label class="grow">Zoom <span id="zoomVal">1.0×</span>
             <input type="range" id="zoom" min="100" max="150" step="1">
           </label>
+          <p class="sub zoom-note" id="zoomNote" hidden></p>
           <label class="grow">Velocidade máx. <span id="speedVal">60°/s</span>
             <input type="range" id="speed" min="10" max="240" step="5" value="60">
           </label>
@@ -62,40 +63,18 @@
     </section>
 
     <section class="side">
-      <h2>Geral</h2>
-      <label class="toggle"><input type="checkbox" id="autostart"><span>Iniciar com o sistema (no tray)</span></label>
+      <nav class="tabs" id="tabs" role="tablist">
+        <button role="tab" data-tab="camera">Câmera</button>
+        <button role="tab" data-tab="imagem">Imagem</button>
+        <button role="tab" data-tab="virtual">Virtual</button>
+        <button role="tab" data-tab="app">App</button>
+      </nav>
+
+      <div class="tab-panel" data-panel="camera" role="tabpanel">
       <div class="field">
-        <span>Câmeras conectadas <small>(clique para usar)</small></span>
+        <span>Câmeras conectadas</span>
         <ul class="cams" id="cams"></ul>
       </div>
-
-      <h2>Vídeo</h2>
-      <div class="field">
-        <span>Resolução</span>
-        <select id="videoRes"></select>
-      </div>
-      <div class="field">
-        <span>FPS</span>
-        <select id="videoFps"></select>
-      </div>
-      <p class="sub" id="videoNote"></p>
-
-      <h2>Câmera virtual</h2>
-      <label class="toggle"><input type="checkbox" id="blur"><span>Fundo desfocado</span></label>
-      <p class="sub" id="blurStatus">Iniciando a câmera virtual…</p>
-      <div class="slider">
-        <div class="lbl"><span>Intensidade do desfoque</span><b id="blurAmountVal"></b></div>
-        <input type="range" id="blurAmount" min="2" max="60" step="1">
-      </div>
-      <div class="slider">
-        <div class="lbl"><span>Recorte</span><b id="blurEdgeVal"></b></div>
-        <input type="range" id="blurEdge" min="0.2" max="0.85" step="0.05">
-        <div class="lbl hint-row"><small>leva mais do entorno</small><small>mais justo em você</small></div>
-      </div>
-
-      <h2>Atalhos globais</h2>
-      <div id="shortcuts" class="shortcuts"></div>
-      <p class="sub">Funcionam com o app no tray. Clique e pressione a combinação; Esc cancela, Backspace remove.</p>
 
       <h2>Câmera</h2>
       <div id="vendorSection">
@@ -109,9 +88,11 @@
         </select>
       </div>
       <label class="toggle"><input type="checkbox" id="gesture"><span>Controle por gestos</span></label>
+      <label class="toggle"><input type="checkbox" id="rotate180"><span>Girar imagem 180°</span></label>
       <label class="toggle"><input type="checkbox" id="hflip"><span>Espelhar horizontal</span></label>
       <label class="toggle"><input type="checkbox" id="vflip"><span>Espelhar vertical</span></label>
-      <label class="toggle"><input type="checkbox" id="autorotate"><span>Girar se de cabeça para baixo</span></label>
+      <label class="toggle"><input type="checkbox" id="autorotate"><span>Corrigir sozinha se a câmera estiver montada de cabeça para baixo</span></label>
+      <p class="sub">Usa o sensor da câmera: só gira quando ela está de fato invertida (teto, suporte). Para girar a imagem com a câmera de pé, use "Girar imagem 180°".</p>
       <div class="field">
         <span>Áudio</span>
         <select id="audio">
@@ -132,8 +113,68 @@
       </div>
       </div>
 
+      </div>
+
+      <div class="tab-panel" data-panel="imagem" role="tabpanel">
+      <h2>Vídeo</h2>
+      <div class="field">
+        <span>Resolução</span>
+        <select id="videoRes"></select>
+      </div>
+      <div class="field">
+        <span>FPS</span>
+        <select id="videoFps"></select>
+      </div>
+      <p class="sub" id="videoNote"></p>
+
       <h2>Imagem <button class="link" id="resetImage">restaurar padrão</button></h2>
       <div id="image"></div>
+      </div>
+
+      <div class="tab-panel" data-panel="virtual" role="tabpanel">
+      <h2>Câmera virtual</h2>
+      <label class="toggle"><input type="checkbox" id="blur"><span>Fundo desfocado</span></label>
+      <p class="sub" id="blurStatus">Iniciando a câmera virtual…</p>
+      <div class="slider">
+        <div class="lbl"><span>Intensidade do desfoque</span><b id="blurAmountVal"></b></div>
+        <input type="range" id="blurAmount" min="2" max="60" step="1">
+      </div>
+      <div class="slider">
+        <div class="lbl"><span>Recorte</span><b id="blurEdgeVal"></b></div>
+        <input type="range" id="blurEdge" min="0.2" max="0.85" step="0.05">
+        <div class="lbl hint-row"><small>leva mais do entorno</small><small>mais justo em você</small></div>
+      </div>
+
+      <h2>Modo privacidade</h2>
+      <label class="toggle"><input type="checkbox" id="privImgOn"><span>Mostrar uma imagem na câmera virtual</span></label>
+      <div class="priv-thumb" id="privThumb"><img id="privImg" alt="Imagem da privacidade" hidden><span id="privDefault">Câmera em pausa (padrão)</span></div>
+      <div class="priv-actions">
+        <button id="privChoose">Escolher imagem…</button>
+        <button class="link" id="privClear" hidden>usar padrão</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="privHold"><span>Esperar a câmera subir antes de tirar a imagem</span></label>
+      <div class="field">
+        <span>Tempo de espera</span>
+        <select id="privHoldSec">
+          <option value="1">1 s</option>
+          <option value="2">2 s (recomendado)</option>
+          <option value="3">3 s</option>
+          <option value="5">5 s</option>
+        </select>
+      </div>
+      <p class="sub">Vale para quem usa a câmera virtual. Apps usando a PIXY direto continuam vendo preto (a lente recolhe).</p>
+
+      </div>
+
+      <div class="tab-panel" data-panel="app" role="tabpanel">
+      <h2>Geral</h2>
+      <label class="toggle"><input type="checkbox" id="autostart"><span>Iniciar com o sistema (no tray)</span></label>
+
+      <h2>Atalhos globais</h2>
+      <div id="shortcuts" class="shortcuts"></div>
+      <p class="sub">Funcionam com o app no tray. Clique e pressione a combinação; Esc cancela, Backspace remove.</p>
+
+      </div>
     </section>
   </main>
 

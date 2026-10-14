@@ -67,14 +67,25 @@ function applyCapabilities() {
   for (const el of $("vendorSection").querySelectorAll("input, select")) el.disabled = !hid;
   for (const id of ["joy", "map", "presets", "center", "speed"]) $(id).classList.toggle("unsupported", !move);
   $("speed").disabled = !move;
-  $("zoom").disabled = !ptz.zoom;
-  $("zoom").closest("label").classList.toggle("unsupported", !ptz.zoom);
+  const zoomWhy = !ptz.zoom ? "A câmera selecionada não tem zoom" : (cam.blocked || {}).zoom;
+  $("zoom").disabled = Boolean(zoomWhy);
+  $("zoom").closest("label").classList.toggle("unsupported", Boolean(zoomWhy));
+  $("zoomNote").textContent = zoomWhy && ptz.zoom ? `Zoom desativado: ${zoomWhy}.` : "";
+  $("zoomNote").hidden = !$("zoomNote").textContent;
   $("joy").title = move ? "" : "A câmera selecionada não tem pan/tilt";
 }
 
+// Na primeira vez que a câmera é conhecida (ou quando ela troca), relê o estado dos
+// controles do fabricante: ao abrir, a janela pedia o estado antes de saber se a câmera
+// tinha HID, pulava a leitura e os toggles ficavam com valores velhos.
+let stateCameraId = null;
 function showMode(s) {
   app = { ...app, ...s };
   applyCapabilities();
+  if (app.camera && app.camera.id !== stateCameraId) {
+    stateCameraId = app.camera.id;
+    if (app.camera.vendorHid) call("state").then(showState).catch(() => {});
+  }
   if (app.camera && !app.camera.vendorHid) {
     for (const b of $("modes").children) b.classList.remove("on");
     $("modeNote").textContent = app.camera.name ? `${app.camera.name}: modo, privacidade e tracking só nas câmeras homologadas.` : "";
@@ -91,7 +102,11 @@ function showMode(s) {
       : "";
 }
 
+// 180° = espelhar na horizontal e na vertical ao mesmo tempo.
+const flips = { hflip: false, vflip: false };
 function showState(s) {
+  for (const k of ["hflip", "vflip"]) if (k in s && s[k] !== null) flips[k] = s[k];
+  $("rotate180").checked = flips.hflip && flips.vflip;
   for (const k of ["gesture", "hflip", "vflip", "autorotate"]) if (k in s && s[k] !== null) $(k).checked = s[k];
   if (s.target) $("target").value = s.target;
   if (s.audio) $("audio").value = s.audio;
@@ -120,6 +135,10 @@ $("gesture").addEventListener("change", async (e) => showState(await call("gestu
 for (const name of ["hflip", "vflip", "autorotate"]) {
   $(name).addEventListener("change", async (e) => showState(await call("feature", { name, value: e.target.checked })));
 }
+$("rotate180").addEventListener("change", async (e) => {
+  const on = e.target.checked;
+  for (const name of ["hflip", "vflip"]) showState(await call("feature", { name, value: on }));
+});
 $("audio").addEventListener("change", async (e) => showState(await call("audio", { value: e.target.value })));
 $("privacyDelay").addEventListener("change", async (e) => showState(await call("privacy_delay", { value: +e.target.value })));
 
@@ -203,12 +222,17 @@ async function loadControls() {
 }
 
 $("resetImage").addEventListener("click", async () => {
-  // Automáticos primeiro, para os manuais dependentes não ficarem presos.
-  const order = [...controls].sort((a, b) => (b.type !== "int") - (a.type !== "int"));
-  for (const c of order) {
-    if (PTZ_CONTROLS.has(c.name) || c.readonly || c.value === c.default) continue;
-    await call("set", { name: c.name, value: c.default }).catch(() => {});
-  }
+  // Automáticos (menus e liga/desliga) primeiro; depois relê, porque com o automático
+  // ligado o manual correspondente fica inativo e a câmera recusa mudá-lo.
+  const reset = async (list) => {
+    for (const c of list) {
+      if (PTZ_CONTROLS.has(c.name) || c.readonly || c.inactive || c.value === c.default) continue;
+      await call("set", { name: c.name, value: c.default }).catch(() => {});
+    }
+  };
+  await reset(controls.filter((c) => c.type !== "int"));
+  await loadControls();
+  await reset(controls.filter((c) => c.type === "int"));
   await loadControls();
 });
 
@@ -597,6 +621,8 @@ async function saveVideo() {
   const [w, h] = $("videoRes").value.split("x").map(Number);
   const mode = modes.find((m) => m.width === w && m.height === h);
   const max = Math.min(APP_MAX_FPS, mode ? Math.max(...mode.fps) : APP_MAX_FPS);
+  // O preview solta a câmera antes: segurando o modo antigo, o novo não consegue ser fixado.
+  if (previewOn && previewSource === "original") stopStream();
   const res = await window.pixy.setVideo({ width: w, height: h, fps: Math.min(+$("videoFps").value || 30, max) });
   video = res.current;
   renderVideo(res.blurOutput);
@@ -857,6 +883,27 @@ $("autostart").addEventListener("change", async (e) => {
   }
 });
 
+// --- Imagem do modo privacidade (câmera virtual) ----------------------------------------
+let privUrl = null;
+function showPrivacyImage(cfg) {
+  $("privImgOn").checked = Boolean(cfg.enabled);
+  $("privHold").checked = cfg.holdOnExit !== false;
+  $("privHoldSec").value = String(cfg.holdSeconds ?? 2);
+  $("privHoldSec").disabled = !$("privHold").checked;
+  if (privUrl) URL.revokeObjectURL(privUrl);
+  privUrl = cfg.image ? URL.createObjectURL(new Blob([cfg.image])) : null;
+  $("privImg").hidden = !privUrl;
+  if (privUrl) $("privImg").src = privUrl;
+  $("privDefault").hidden = Boolean(privUrl);
+  $("privClear").hidden = !cfg.file;
+}
+$("privImgOn").addEventListener("change", async (e) => showPrivacyImage(await window.pixy.setPrivacyImage({ enabled: e.target.checked })));
+$("privHold").addEventListener("change", async (e) => showPrivacyImage(await window.pixy.setPrivacyImage({ holdOnExit: e.target.checked })));
+$("privHoldSec").addEventListener("change", async (e) => showPrivacyImage(await window.pixy.setPrivacyImage({ holdSeconds: +e.target.value })));
+$("privChoose").addEventListener("click", async () => showPrivacyImage(await window.pixy.choosePrivacyImage()));
+$("privClear").addEventListener("click", async () => showPrivacyImage(await window.pixy.clearPrivacyImage()));
+window.pixy.getPrivacyImage().then(showPrivacyImage).catch(() => {});
+
 // --- Câmeras conectadas e homologação ----------------------------------------------------
 const CAM_STATUS = {
   homologada: "homologada",
@@ -879,19 +926,26 @@ async function loadCameras() {
   for (const c of cams) {
     const li = document.createElement("li");
     li.classList.toggle("selected", c.selected);
-    li.addEventListener("click", async () => {
-      if (c.selected) return;
-      li.style.opacity = ".6";
-      try {
-        showMode(await window.pixy.selectCamera(c.id));
-      } catch (e) {
-        toast(`Não consegui trocar de câmera: ${e.message}`);
-      }
-      loadCameras();
-      loadVideo().catch(() => {});
-      refreshAll();
-      if (previewOn && previewSource === "original") openPreview();
-    });
+    // Troca só pelo botão: com o cartão inteiro clicável, rolar o painel trocava de câmera.
+    let use = null;
+    if (!c.selected) {
+      use = document.createElement("button");
+      use.className = "use";
+      use.textContent = "Usar";
+      use.title = `Passar a usar ${c.name}`;
+      use.addEventListener("click", async () => {
+        use.disabled = true;
+        try {
+          showMode(await window.pixy.selectCamera(c.id));
+        } catch (e) {
+          toast(`Não consegui trocar de câmera: ${e.message}`);
+        }
+        loadCameras();
+        loadVideo().catch(() => {});
+        refreshAll();
+        if (previewOn && previewSource === "original") openPreview();
+      });
+    }
     const tag = document.createElement("span");
     tag.className = `tag ${c.status}`;
     tag.textContent = CAM_STATUS[c.status];
@@ -899,7 +953,7 @@ async function loadCameras() {
     sub.textContent = `${c.vendor}:${c.product} · firmware ${c.firmware}` + (
       c.status === "firmware-nao-testado" ? ` (testado: ${c.homologada.firmwares.join(", ")}); pode funcionar, mas sem garantia`
         : c.status === "nao-suportada" ? "; o app controla só os modelos homologados" : "");
-    li.append(tag, document.createTextNode(c.name), sub);
+    li.append(...(use ? [use] : []), tag, document.createTextNode(c.name), sub);
     if (c.homologada) li.title = `Testado em ${c.homologada.testado_em}: ${c.homologada.recursos.join(", ")}`;
     list.append(li);
   }
@@ -956,4 +1010,24 @@ window.pixy.onCameraReset(() => {
   refreshAll();
   loadCameras();
 });
-window.addEventListener("focus", () => connected && call("state").then(showState).catch(() => {}));
+// Estado dos controles do fabricante ao voltar para a janela: só em câmeras com HID.
+window.addEventListener("focus", () => connected && app.camera && app.camera.vendorHid && call("state").then(showState).catch(() => {}));
+
+// --- Abas do painel lateral (a última aberta fica salva) -------------------------------
+function showTab(name) {
+  for (const b of $("tabs").children) {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on);
+  }
+  for (const p of document.querySelectorAll(".tab-panel")) p.hidden = p.dataset.panel !== name;
+  try {
+    localStorage.setItem("tab", name);
+  } catch {}
+}
+$("tabs").addEventListener("click", (e) => e.target.dataset && e.target.dataset.tab && showTab(e.target.dataset.tab));
+let savedTab = "camera";
+try {
+  savedTab = localStorage.getItem("tab") || "camera";
+} catch {}
+showTab(savedTab);

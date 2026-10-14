@@ -1,0 +1,40 @@
+name: Camera report / Relatar câmera
+description: Tested PIXY Control with a camera or firmware not in the list? Tell us what worked. / Testou com uma câmera ou firmware fora da lista? Conte o que funcionou.
+title: "[camera] <model> firmware <x.y>"
+labels: ["camera-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Model, USB ID and firmware are shown in the **Câmera** tab, under "Câmeras conectadas".
+        Modelo, USB e firmware aparecem na aba **Câmera**, em "Câmeras conectadas".
+  - type: input
+    id: model
+    attributes: { label: Model / Modelo, placeholder: EMEET PIXY }
+    validations: { required: true }
+  - type: input
+    id: usb
+    attributes: { label: USB ID (vendor:product), placeholder: "328f:00c0" }
+    validations: { required: true }
+  - type: input
+    id: firmware
+    attributes: { label: Firmware, placeholder: "20.04" }
+    validations: { required: true }
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What worked / O que funcionou
+      options:
+        - label: Preview
+        - label: Resolution and FPS / Resolução e FPS
+        - label: Image controls / Ajustes de imagem
+        - label: Zoom
+        - label: Pan/tilt (joystick)
+        - label: Virtual camera / Câmera virtual
+        - label: Background blur / Fundo desfocado
+        - label: Privacy mode / Privacidade
+        - label: Tracking
+        - label: Gestures / Gestos
+  - type: textarea
+    id: notes
+    attributes: { label: Notes / Observações, description: "Anything that failed, odd behavior, distro and version. / O que falhou, comportamento estranho, distro e versão." }

@@ -20,3 +20,12 @@ test("outra câmera não é suportada", () => {
   assert.equal(c.status, "nao-suportada");
   assert.equal(c.homologada, null);
 });
+
+test("PIXY sem zoom só em 1920x1080 a 60", () => {
+  const { limits } = require("../src/cameras");
+  const [c] = classify([pixy]);
+  assert.ok(limits(c.homologada, { width: 1920, height: 1080, fps: 60 }).zoom);
+  assert.deepEqual(limits(c.homologada, { width: 1920, height: 1080, fps: 30 }), {});
+  assert.deepEqual(limits(c.homologada, { width: 1280, height: 720, fps: 60 }), {});
+  assert.deepEqual(limits(null, { width: 1920, height: 1080, fps: 60 }), {});
+});

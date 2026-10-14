@@ -1,0 +1,23 @@
+name: Bug
+description: Something does not work as expected. / Algo não funciona como deveria.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened / O que aconteceu, description: "What you did, what you expected, what you got. / O que fez, o que esperava, o que aconteceu." }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: App version / Versão do app, placeholder: "0.2.0 (AppImage)" }
+  - type: input
+    id: system
+    attributes: { label: Distro and desktop / Distro e desktop, placeholder: "Ubuntu 24.04, GNOME (X11)" }
+  - type: input
+    id: camera
+    attributes: { label: Camera / Câmera, placeholder: "EMEET PIXY 328f:00c0 firmware 20.04" }
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "Last lines of ~/.config/pixy-control/pixy-control.log / Últimas linhas do log"
+      render: text

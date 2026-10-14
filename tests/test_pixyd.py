@@ -105,5 +105,14 @@ class Resposta(unittest.TestCase):
         self.assertEqual(res["video"], "/dev/video5")
 
 
+class TrocaDeCamera(unittest.TestCase):
+    def test_fechar_esquece_os_controles(self):
+        # regressão: controles da PIXY sobravam ao trocar para outra câmera → EINVAL
+        cam = pixyd.Camera()
+        cam.by_name = {"pan_absolute": {"id": 1}}
+        cam.close()
+        self.assertEqual(cam.by_name, {})
+
+
 if __name__ == "__main__":
     unittest.main()

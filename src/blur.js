@@ -24,8 +24,21 @@ let blurPx = 18;
 let edge = 0.55; // centro do recorte: maior = recorta mais justo, menor = leva mais do entorno
 let previewOn = false;
 let effect = true;
+// Modo privacidade: a câmera física manda preto; aqui a saída vira uma imagem escolhida
+// (ou um cartão padrão). Os quadros pretos continuam chegando e servem de relógio.
+let privacy = false;
+let privacyImage = null; // ImageBitmap da imagem escolhida; null = cartão padrão
 function applyConfig(c) {
   if (c.effect != null) effect = Boolean(c.effect);
+  if (c.privacy != null) privacy = Boolean(c.privacy);
+  if (c.privacyImage !== undefined) {
+    privacyImage = null;
+    if (c.privacyImage) {
+      createImageBitmap(new Blob([c.privacyImage]))
+        .then((bmp) => (privacyImage = bmp))
+        .catch((e) => console.warn(`imagem da privacidade inválida: ${e.message}`));
+    }
+  }
   if (c.blur != null) blurPx = Math.max(2, Math.min(60, Number(c.blur)));
   if (c.edge != null) edge = Math.max(0.2, Math.min(0.85, Number(c.edge)));
   if (c.preview != null) previewOn = Boolean(c.preview);
@@ -236,6 +249,34 @@ function updateMask(confidence) {
   maskCtx.putImageData(maskImage, 0, 0);
 }
 
+// Cartão padrão da privacidade: escuro, com o aviso centralizado.
+function drawPrivacyCard() {
+  outCtx.fillStyle = "#15171c";
+  outCtx.fillRect(0, 0, W, H);
+  const k = H / 720;
+  outCtx.fillStyle = "#2a2e36";
+  outCtx.beginPath();
+  outCtx.arc(W / 2, H / 2 - 50 * k, 70 * k, 0, Math.PI * 2);
+  outCtx.fill();
+  outCtx.fillStyle = "#ef5f5f";
+  outCtx.fillRect(W / 2 - 55 * k, H / 2 - 55 * k, 110 * k, 10 * k); // risco sobre a "lente"
+  outCtx.fillStyle = "#e6e8eb";
+  outCtx.font = `600 ${Math.round(40 * k)}px system-ui, sans-serif`;
+  outCtx.textAlign = "center";
+  outCtx.fillText("Câmera em pausa", W / 2, H / 2 + 80 * k);
+}
+
+// Imagem escolhida, cobrindo a saída inteira sem distorcer (corta as sobras).
+function drawPrivacyImage() {
+  const img = privacyImage;
+  const scale = Math.max(W / img.width, H / img.height);
+  const w = img.width * scale;
+  const h = img.height * scale;
+  outCtx.fillStyle = "#000";
+  outCtx.fillRect(0, 0, W, H);
+  outCtx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+}
+
 function composite(src) {
   outCtx.filter = `blur(${blurPx}px)`;
   // Desenha um pouco maior para o blur não escurecer as bordas do quadro.
@@ -284,7 +325,7 @@ async function main() {
       let t0 = performance.now();
       // Recorte a cada dois quadros: a silhueta quase não muda em 33 ms e a inferência
       // é a etapa mais cara; no quadro do meio a máscara anterior é reaproveitada.
-      if (effect && segTick++ % 2 === 0) {
+      if (!privacy && effect && segTick++ % 2 === 0) {
         smallCtx.drawImage(frame, 0, 0, MW, MH);
         segmenter.segmentForVideo(small, performance.now(), (result) => {
           const m = result.confidenceMasks && result.confidenceMasks[0];
@@ -292,7 +333,8 @@ async function main() {
         });
       }
       let t1 = performance.now(); t.seg += t1 - t0; t0 = t1;
-      if (effect) composite(frame);
+      if (privacy) privacyImage ? drawPrivacyImage() : drawPrivacyCard();
+      else if (effect) composite(frame);
       else outCtx.drawImage(frame, 0, 0, W, H); // sem efeito: só ajusta ao tamanho de saída
       t1 = performance.now(); t.comp += t1 - t0; t0 = t1;
       const yuv = i420.read(out);

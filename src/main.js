@@ -1,5 +1,5 @@
 const {
-  app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, protocol, session, shell, Tray,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, session, shell, Tray,
 } = require("electron");
 const { spawn } = require("node:child_process");
 const net = require("node:net");
@@ -304,7 +304,7 @@ async function refreshCamera() {
   const list = classify((await call({ op: "cameras" })).cameras);
   const c = list.find((x) => x.device === st.video);
   camera = c
-    ? { ...camera, id: c.id, name: c.name, card: c.card, vendorHid: Boolean(st.vendor_hid), status: c.status }
+    ? { ...camera, id: c.id, name: c.name, card: c.card, vendorHid: Boolean(st.vendor_hid), status: c.status, homologada: c.homologada }
     : { ...camera, id: null, name: "", card: "", vendorHid: false, status: null };
   pushState();
   return camera;
@@ -336,7 +336,7 @@ async function doSelectCamera(id, save) {
   await refreshCamera();
   await ensureVideoForCamera();
   logLine("camera", `selecionada: ${camera.name || "nenhuma"} (${camera.status || "-"})`);
-  if (virtualWanted) restartVirtual();
+  if (virtualWanted) await restartVirtual();
   await applyAfterSelect();
   runDiagnose().catch(() => {});
   return appState();
@@ -354,10 +354,90 @@ const streaming = (m) => m === "standard" || m === "tracking";
 const isTracking = () => desired === "tracking" && real !== "privacy";
 
 function appState() {
-  return { mode: real, desired, idle: real === "standby", blur: blurState, blurConfig: blurConfig(), video: videoConfig(), camera };
+  // limitações do modelo no modo de vídeo atual (ex.: PIXY sem zoom em 1080p60)
+  const blocked = limits(camera.homologada, videoConfig());
+  return { mode: real, desired, idle: real === "standby", blur: blurState, blurConfig: blurConfig(), video: videoConfig(), camera: { ...camera, blocked } };
 }
 
+// --- Imagem da privacidade (câmera virtual) ---------------------------------------------
+// Com a câmera em privacidade, a câmera virtual mostra uma imagem escolhida (ou o cartão
+// padrão) em vez do preto da lente recolhida. A imagem é copiada para o userData.
+const privacyConfig = () => ({ enabled: false, file: null, holdOnExit: true, holdSeconds: 2, ...readJson("settings.json", {}).privacyImage });
+const privacyActive = () => real === "privacy" && privacyConfig().enabled;
+function privacyImageBuffer() {
+  const { file } = privacyConfig();
+  try {
+    return file ? fs.readFileSync(file) : null;
+  } catch {
+    return null;
+  }
+}
+let privacySent = null;
+let privacyHold = null; // atraso ao sair da privacidade: a imagem fica enquanto a lente sobe
+function syncPrivacy(force = false) {
+  const on = privacyActive();
+  if (on) {
+    clearTimeout(privacyHold);
+    privacyHold = null;
+  }
+  if (!blurWin || (!force && on === privacySent)) return;
+  const cfg = privacyConfig();
+  if (!on && privacySent && cfg.holdOnExit && !force) {
+    // Medido: a PIXY leva ~2 s para subir a lente e estabilizar a exposição.
+    if (!privacyHold) {
+      privacyHold = setTimeout(() => {
+        privacyHold = null;
+        if (privacyActive() || !blurWin) return;
+        privacySent = false;
+        blurWin.webContents.send("blur:config", { privacy: false });
+      }, Math.max(0, Number(cfg.holdSeconds) || 0) * 1000);
+    }
+    return;
+  }
+  clearTimeout(privacyHold);
+  privacyHold = null;
+  privacySent = on;
+  blurWin.webContents.send("blur:config", { privacy: on });
+}
+function savePrivacy(patch) {
+  const next = { ...privacyConfig(), ...patch };
+  writeJson("settings.json", { ...readJson("settings.json", {}), privacyImage: next });
+  if (blurWin) blurWin.webContents.send("blur:config", { privacyImage: privacyImageBuffer() });
+  syncPrivacy(true);
+  return { ...next, image: privacyImageBuffer() };
+}
+handle("privacy:get", () => ({ ...privacyConfig(), image: privacyImageBuffer() }));
+handle("privacy:set", (_e, patch) => {
+  const p = {};
+  if (patch && "enabled" in patch) p.enabled = Boolean(patch.enabled);
+  if (patch && "holdOnExit" in patch) p.holdOnExit = Boolean(patch.holdOnExit);
+  if (patch && Number.isFinite(+patch.holdSeconds)) p.holdSeconds = Math.min(10, Math.max(0, +patch.holdSeconds));
+  return savePrivacy(p);
+});
+handle("privacy:choose", async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: "Imagem para o modo privacidade",
+    filters: [{ name: "Imagens", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    properties: ["openFile"],
+  });
+  if (r.canceled || !r.filePaths[0]) return { ...privacyConfig(), image: privacyImageBuffer() };
+  const src = r.filePaths[0];
+  const dest = path.join(app.getPath("userData"), `privacy-image${path.extname(src).toLowerCase()}`);
+  for (const f of fs.readdirSync(app.getPath("userData"))) {
+    if (f.startsWith("privacy-image")) fs.rmSync(path.join(app.getPath("userData"), f), { force: true });
+  }
+  fs.copyFileSync(src, dest);
+  logLine("privacidade", `imagem escolhida: ${path.basename(src)}`);
+  return savePrivacy({ file: dest, enabled: true });
+});
+handle("privacy:clear", () => {
+  const { file } = privacyConfig();
+  if (file) fs.rmSync(file, { force: true });
+  return savePrivacy({ file: null });
+});
+
 function pushState() {
+  syncPrivacy();
   if (win && !win.isDestroyed()) win.webContents.send("app:state", appState());
   updateTray();
 }
@@ -389,6 +469,7 @@ function onReadback(mode) {
     pendingGesture = null;
   }
   if (mode === real) return;
+  logLine("modo", `${real} → ${mode} (desejado: ${desired})`);
   real = mode;
   pushState();
 }
@@ -425,6 +506,7 @@ async function doApply(mode, notify) {
       await call({ op: "mode", value: "standard" });
       got = await confirmMode("standard", 2500);
     }
+    if (got !== real) logLine("modo", `${real} → ${got} (pedido pelo app: ${mode})`);
     real = got;
     pendingGesture = null;
     pushState();
@@ -564,8 +646,8 @@ let blurState = { on: false, running: false, fps: null, error: null };
 
 const VIRTUAL_LABEL = "EMEET PIXY (virtual)";
 // Sinal para outros programas (ex.: um script que retransmite a câmera para outro PC):
-// existe enquanto este app escreve na câmera virtual. O loopback anuncia captura sempre (exclusive_caps=0, para o PipeWire listá-lo),
-// então "tem captura" não diz se há imagem; o PID do ffmpeg vivo diz.
+// existe enquanto este app escreve na câmera virtual, com o PID do ffmpeg. Um PID vivo é
+// sinal mais confiável de que há imagem do que as capacidades anunciadas pelo device.
 const VIRTUAL_MARKER = path.join(process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`, "pixy-control-virtual.json");
 const clearMarker = () => fs.rmSync(VIRTUAL_MARKER, { force: true });
 let virtualWanted = false; // a câmera virtual deve estar no ar (do início do app até sair)
@@ -644,12 +726,15 @@ handle("video:set", async (_e, v) => {
   saveVideo(next);
   logLine("video", `${camera.name}: modo ${next.width}x${next.height}@${next.fps}`);
   // A câmera virtual abriu a câmera e o v4l2loopback no tamanho antigo: reabre os dois.
-  restartVirtual();
+  await restartVirtual();
   pushState();
   return { current: next, blurOutput: blurOutput() };
 });
 
-handle("blur:config", () => ({ ...blurConfig(), preview: blurPreviewOn, effect: blurState.on }));
+handle("blur:config", () => {
+  privacySent = privacyActive();
+  return { ...blurConfig(), preview: blurPreviewOn, effect: blurState.on, privacy: privacySent, privacyImage: privacyImageBuffer() };
+});
 handle("app:blur-config", (_e, patch) => {
   const next = { ...blurConfig() };
   if (patch && Number.isFinite(+patch.blur)) next.blur = +patch.blur;
@@ -714,14 +799,57 @@ function stopVirtual() {
   if (blurWin) blurWin.destroy();
   blurWin = null;
   stopFfmpeg();
+  stopPin();
   setBlurState({ running: false, fps: null });
 }
 
-function restartVirtual() {
+async function restartVirtual() {
   if (blurWin) blurWin.destroy();
   blurWin = null;
   stopFfmpeg();
+  await pinFormat();
   startVirtual();
+}
+
+// --- Fixar o formato da câmera ----------------------------------------------------------
+// O Chromium sempre abre um modo na taxa máxima dele (1080p da PIXY: 60) e descarta
+// quadros para entregar o fps pedido. Na PIXY isso muda o comportamento (em 1080p60 ela
+// ignora o zoom). Como quem abre a câmera primeiro define o modo para todos, um consumidor
+// mínimo do GStreamer abre antes no modo exato (sem decodificar nada) e o Chromium herda.
+let pin = null;
+async function pinFormat() {
+  stopPin();
+  const v = videoConfig();
+  const { modes } = await call({ op: "modes" }).catch(() => ({ modes: [] }));
+  const m = modes.find((x) => x.width === v.width && x.height === v.height);
+  if (!m || Math.max(...m.fps) <= v.fps) return; // já é a taxa máxima: o Chromium pede certo
+  const { node } = await call({ op: "node" }).catch(() => ({}));
+  if (!node) return;
+  await sleep(300); // a câmera anterior soltando o nó
+  const p = spawn("gst-launch-1.0", [
+    "-q", "pipewiresrc", `target-object=${node}`,
+    "stream-properties=props,media.type=Video,media.category=Capture,media.role=Camera",
+    "!", `image/jpeg,width=${v.width},height=${v.height},framerate=${v.fps}/1`,
+    "!", "fakesink", "sync=false",
+  ], { stdio: "ignore" });
+  pin = p;
+  p.on("error", (e) => {
+    if (pin === p) pin = null;
+    logLine("video", `fixar formato: ${e.code === "ENOENT" ? "gst-launch-1.0 não instalado" : e.message}`);
+  });
+  p.on("exit", (code) => {
+    if (pin !== p) return;
+    pin = null;
+    if (code) logLine("video", `fixar formato: o GStreamer saiu (${code}); a câmera fica no modo que o Chromium escolher`);
+  });
+  await sleep(1200); // o PipeWire negociar o formato antes de o Chromium chegar
+  if (pin === p) logLine("video", `formato fixado: ${v.width}x${v.height}@${v.fps}`);
+}
+function stopPin() {
+  if (!pin) return;
+  const p = pin;
+  pin = null;
+  p.kill();
 }
 
 // Encerra o ffmpeg de propósito: a saída dele (código 255 no SIGTERM) não é erro.
@@ -834,7 +962,7 @@ function toggleBlur(notify) {
 // --- Câmeras homologadas ---------------------------------------------------------------
 // src/cameras.json lista os modelos testados; cada câmera conectada sai como homologada,
 // modelo homologado com firmware não testado, ou não suportada.
-const { classify } = require("./cameras");
+const { classify, limits } = require("./cameras");
 const camerasStatus = async () => classify((await call({ op: "cameras" })).cameras);
 handle("cameras:get", () => camerasStatus());
 
@@ -850,6 +978,7 @@ const DIAG_INFO = {
   "pw-dump": { label: "pw-dump", level: "erro", fix: "sudo apt install pipewire-bin", impact: "lista de resoluções e fps" },
   "pw-cli": { label: "pw-cli", level: "erro", fix: "sudo apt install pipewire-bin", impact: "lista de resoluções e fps" },
   gsettings: { label: "gsettings (GNOME)", level: "aviso", fix: "", impact: "atalhos globais só funcionam no GNOME" },
+  "gst-launch-1.0": { label: "GStreamer", level: "aviso", fix: "sudo apt install gstreamer1.0-tools gstreamer1.0-pipewire", impact: "fps abaixo do máximo de um modo (ex.: 1080p a 30) pode virar o máximo" },
   hid: { label: "acesso ao HID da câmera", level: "erro", fix: () => `sudo "${SETUP()}"`, impact: "privacidade, tracking, gestos, áudio, joystick" },
   v4l2loopback: { label: "câmera virtual (v4l2loopback)", level: "erro", fix: () => `sudo apt install v4l2loopback-dkms && sudo "${SETUP()}"`, impact: "câmera virtual e fundo desfocado" },
   wireplumber: { label: "regra do WirePlumber", level: "aviso", fix: () => `sudo "${SETUP()}"`, impact: "só se o preview disser que não há câmera (Ubuntu 24.04)" },
@@ -1104,6 +1233,7 @@ app.whenReady().then(async () => {
   watchCamera();
   setInterval(watchCamera, 3000);
   runToggle(process.argv); // aberto pelo pixy-toggle com o app fechado
+  await pinFormat();
   startVirtual(); // câmera virtual sempre no ar, com ou sem o efeito
   setTimeout(() => runDiagnose().catch(() => {}), 1500); // dá tempo de o helper subir
   setupUpdates();

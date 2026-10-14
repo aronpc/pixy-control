@@ -116,14 +116,19 @@ def device_id():
     return None
 
 
-def video_modes():
-    """Modos MJPEG que a câmera selecionada anuncia (resolução e fps), pelo nó do PipeWire:
-    é por ele que o preview e o blur abrem a câmera."""
+def pipewire_node():
+    """Nó PipeWire da câmera selecionada (o objeto do pw-dump), ou None."""
     raw = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=10).stdout.strip()
     objs = json.JSONDecoder().raw_decode(raw)[0] if raw else []
     dev = find_video()
-    node = next((o for o in objs if ((o.get("info") or {}).get("props") or {}).get("api.v4l2.path") == dev
+    return next((o for o in objs if ((o.get("info") or {}).get("props") or {}).get("api.v4l2.path") == dev
                  and ((o.get("info") or {}).get("props") or {}).get("media.class") == "Video/Source"), None)
+
+
+def video_modes():
+    """Modos MJPEG que a câmera selecionada anuncia (resolução e fps), pelo nó do PipeWire:
+    é por ele que o preview e o blur abrem a câmera."""
+    node = pipewire_node()
     if not node:
         return []
     txt = subprocess.run(["pw-cli", "enum-params", str(node["id"]), "EnumFormat"], capture_output=True, text=True, timeout=10).stdout
@@ -213,8 +218,12 @@ class Camera:
         if self.fd is not None:
             os.close(self.fd)
         self.fd = None
+        self.by_name = {}  # os controles eram da câmera que fechou
 
     def list(self):
+        # Do zero: depois de trocar de câmera, sobravam controles da anterior (pan da PIXY
+        # na webcam do notebook) e cada leitura deles dava EINVAL.
+        self.by_name = {}
         ctrls, qc = [], QueryCtrl(id=FLAG_NEXT_CTRL)
         while True:
             try:
@@ -264,7 +273,11 @@ class Camera:
 
     def set(self, name, value):
         c = Control(id=self._id(name), value=int(value))
-        fcntl.ioctl(self.fd, VIDIOC_S_CTRL, c)
+        try:
+            fcntl.ioctl(self.fd, VIDIOC_S_CTRL, c)
+        except PermissionError:
+            # EACCES no V4L2 = controle inativo (o automático dele está ligado) ou só leitura
+            raise PermissionError(f"{name} está desativado na câmera (o automático correspondente está ligado)") from None
         return c.value
 
 
@@ -570,7 +583,7 @@ def diagnose():
     def item(key, ok, detail=""):
         out.append({"id": key, "ok": bool(ok), "detail": detail})
 
-    for tool in ("ffmpeg", "pw-dump", "pw-cli", "gsettings"):
+    for tool in ("ffmpeg", "pw-dump", "pw-cli", "gsettings", "gst-launch-1.0"):
         item(tool, shutil.which(tool), "" if shutil.which(tool) else "não encontrado no PATH")
 
     video, hid_dev = find_video(), find_hidraw()
@@ -610,6 +623,9 @@ def handle(req):
         return {"cameras": usb_cameras()}
     if op == "diagnose":
         return {"items": diagnose()}
+    if op == "node":
+        node = pipewire_node()
+        return {"node": node["info"]["props"]["node.name"] if node else None}
     if op == "modes":
         return {"modes": video_modes()}
     if op == "reopen":
