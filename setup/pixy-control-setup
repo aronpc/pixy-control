@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Configuração de sistema do PIXY Control (para AppImage ou código-fonte; o .deb já
+# instala a regra udev). Rodar com sudo:  sudo ./pixy-control-setup
+#
+#  1. regra udev: acesso ao HID da EMEET PIXY sem root
+#  2. v4l2loopback: o device "EMEET PIXY (virtual)" da câmera virtual
+#  3. WirePlumber (por usuário): câmera pelo portal para apps fora de flatpak
+#     (pipewire 1.0 + xdg-desktop-portal 1.18 vêm sem isso no Ubuntu 24.04)
+set -euo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+[[ $EUID -eq 0 ]] || { echo "rode com sudo: sudo $0"; exit 1; }
+USER_NAME="${SUDO_USER:-}"
+
+echo "1/3 regra udev"
+install -m 644 "$HERE/udev/70-emeet-pixy.rules" /etc/udev/rules.d/70-emeet-pixy.rules
+udevadm control --reload && udevadm trigger --subsystem-match=hidraw
+
+echo "2/3 v4l2loopback"
+CONF=/etc/modprobe.d/v4l2loopback.conf
+if grep -qs 'EMEET PIXY (virtual)' /etc/modprobe.d/*.conf; then
+  echo "   já configurado"
+elif grep -qs '^options v4l2loopback' /etc/modprobe.d/*.conf; then
+  echo "   já existe uma configuração do v4l2loopback; acrescente um device com"
+  echo "   card_label \"EMEET PIXY (virtual)\" e exclusive_caps=0 nela (veja o README)."
+else
+  if ! modinfo v4l2loopback >/dev/null 2>&1; then
+    echo "   instale o v4l2loopback (ex.: sudo apt install v4l2loopback-dkms) e rode de novo"
+  else
+    echo 'options v4l2loopback devices=1 video_nr=11 card_label="EMEET PIXY (virtual)" exclusive_caps=0' > "$CONF"
+    echo v4l2loopback > /etc/modules-load.d/v4l2loopback.conf
+    modprobe -r v4l2loopback 2>/dev/null || true
+    modprobe v4l2loopback && echo "   /dev/video11 criado"
+  fi
+fi
+
+echo "3/3 WirePlumber"
+if [[ -n "$USER_NAME" ]]; then
+  HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6)
+  DEST="$HOME_DIR/.config/wireplumber/main.lua.d"
+  install -d -o "$USER_NAME" "$DEST"
+  install -m 644 -o "$USER_NAME" "$HERE/wireplumber/52-portal-camera-host-apps.lua" "$DEST/"
+  echo "   pronto; reinicie a sessão ou rode (sem sudo): systemctl --user restart wireplumber"
+else
+  echo "   pulei (rode com sudo a partir do seu usuário)"
+fi

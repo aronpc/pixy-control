@@ -1,0 +1,35 @@
+name: release
+
+# Cada tag vX.Y.Z vira uma release com AppImage e .deb. O app instalado (AppImage)
+# confere essas releases e se atualiza sozinho; o .deb só avisa que há versão nova.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: Versão da tag bate com o package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - name: Pacote (sem publicar)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: npm run dist
+      - name: Pacote e release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

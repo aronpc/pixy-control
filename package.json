@@ -1,0 +1,122 @@
+{
+  "name": "pixy-control",
+  "version": "0.1.0",
+  "description": "Controle da webcam EMEET PIXY no Linux: toggles, joystick de PTZ, tray, atalhos globais e câmera virtual com fundo desfocado",
+  "main": "src/main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "lint": "eslint .",
+    "test": "node --test tests/*.test.js && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "dist": "electron-builder --linux AppImage deb --publish never",
+    "release": "electron-builder --linux AppImage deb --publish always"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "electron": "44.7.2",
+    "electron-builder": "26.15.3",
+    "eslint": "9.39.5",
+    "globals": "17.13.0"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.0",
+    "electron-updater": "6.8.9"
+  },
+  "author": {
+    "name": "Aron Peyroteo",
+    "email": "aronpeyroteo@gmail.com"
+  },
+  "homepage": "https://github.com/aronpc/pixy-control",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aronpc/pixy-control.git"
+  },
+  "build": {
+    "appId": "io.github.aronpc.pixycontrol",
+    "productName": "PIXY Control",
+    "executableName": "pixy-control",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**",
+      "assets/**",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "helper/pixyd.py",
+        "to": "helper/pixyd.py"
+      },
+      {
+        "from": "bin/pixy-toggle",
+        "to": "bin/pixy-toggle"
+      },
+      {
+        "from": "udev",
+        "to": "udev"
+      },
+      {
+        "from": "wireplumber",
+        "to": "wireplumber"
+      },
+      {
+        "from": "setup",
+        "to": "setup"
+      }
+    ],
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Video",
+      "icon": "build/icon.png",
+      "synopsis": "Controle da webcam EMEET PIXY",
+      "maintainer": "Aron Peyroteo <aronpeyroteo@gmail.com>",
+      "artifactName": "pixy-control-${version}-${arch}.${ext}",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "python3",
+        "ffmpeg",
+        "pipewire-bin",
+        "gstreamer1.0-pipewire"
+      ],
+      "recommends": [
+        "v4l2loopback-dkms"
+      ],
+      "afterInstall": "build/deb-after-install.sh",
+      "afterRemove": "build/deb-after-remove.sh"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "aronpc",
+      "repo": "pixy-control",
+      "releaseType": "release"
+    }
+  },
+  "desktopName": "pixy-control.desktop"
+}

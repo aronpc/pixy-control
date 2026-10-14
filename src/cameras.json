@@ -1,0 +1,13 @@
+{
+  "_comentario": "Câmeras homologadas: modelos testados com o app. Ao testar um modelo ou firmware novo, acrescente aqui e na tabela do README.",
+  "homologadas": [
+    {
+      "nome": "EMEET PIXY",
+      "vendor": "328f",
+      "product": "00c0",
+      "firmwares": ["20.04"],
+      "testado_em": "2026-10-14",
+      "recursos": ["PTZ (pan, tilt, zoom) com joystick", "tracking e alvo do tracking", "privacidade", "gestos", "espelhamento e auto-rotação", "modo de áudio", "imagem (V4L2)", "modos até 4K30 e 1080p60", "câmera virtual com fundo desfocado"]
+    }
+  ]
+}

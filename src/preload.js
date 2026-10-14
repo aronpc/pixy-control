@@ -1,0 +1,27 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("pixy", {
+  call: (op, args = {}) => ipcRenderer.invoke("pixy", { op, ...args }),
+  loadPresets: () => ipcRenderer.invoke("presets:load"),
+  savePresets: (presets) => ipcRenderer.invoke("presets:save", presets),
+  getApp: () => ipcRenderer.invoke("app:get"),
+  setBlur: (on) => ipcRenderer.invoke("app:blur", on),
+  setBlurConfig: (patch) => ipcRenderer.invoke("app:blur-config", patch),
+  setBlurPreview: (on) => ipcRenderer.invoke("app:blur-preview", on),
+  onBlurPreview: (cb) => ipcRenderer.on("blur:preview", (_e, buffer) => cb(buffer)),
+  setMode: (mode) => ipcRenderer.invoke("app:mode", mode),
+  toggle: (what) => ipcRenderer.invoke("app:toggle", what),
+  whoHoldsCamera: () => ipcRenderer.invoke("camera:holders"),
+  getVideo: () => ipcRenderer.invoke("video:get"),
+  setVideo: (v) => ipcRenderer.invoke("video:set", v),
+  onCameraReset: (cb) => ipcRenderer.on("app:camera-reset", () => cb()),
+  getAutostart: () => ipcRenderer.invoke("autostart:get"),
+  setAutostart: (on) => ipcRenderer.invoke("autostart:set", on),
+  getCameras: () => ipcRenderer.invoke("cameras:get"),
+  getDiagnosis: () => ipcRenderer.invoke("diagnose:get"),
+  runDiagnosis: () => ipcRenderer.invoke("diagnose:run"),
+  onDiagnosis: (cb) => ipcRenderer.on("app:diagnose", (_e, d) => cb(d)),
+  getShortcuts: () => ipcRenderer.invoke("shortcuts:get"),
+  setShortcut: (action, accel, force = false) => ipcRenderer.invoke("shortcuts:set", { action, accel, force }),
+  onAppState: (cb) => ipcRenderer.on("app:state", (_e, s) => cb(s)),
+});

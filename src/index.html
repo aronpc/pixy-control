@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' blob: mediastream:; img-src 'self' blob:">
+  <title>PIXY Control</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="dot" id="conn"></span> PIXY Control</div>
+    <div class="modes" id="modes" role="radiogroup" aria-label="Modo da câmera">
+      <button data-mode="standard">Standard</button>
+      <button data-mode="tracking">Tracking</button>
+      <button data-mode="privacy">Privacidade</button>
+    </div>
+    <div class="mode-note" id="modeNote"></div>
+  </header>
+
+  <div class="diag" id="diag" hidden></div>
+
+  <main>
+    <section class="ptz">
+      <div class="ptz-top">
+        <div class="stage">
+          <video id="preview" autoplay muted playsinline hidden></video>
+          <img id="blurPreview" alt="Preview da câmera virtual" hidden>
+          <div class="source" id="previewSource" hidden>
+            <button data-src="original" class="on">Original</button>
+            <button data-src="blur">Virtual</button>
+          </div>
+          <div class="stage-empty" id="stageEmpty">Preview desligado</div>
+          <div class="preview-status" id="previewStatus" hidden></div>
+          <button class="ghost preview-btn" id="previewBtn">Ligar preview</button>
+        </div>
+
+        <div class="ptz-side">
+          <div class="joy" id="joy" tabindex="-1" aria-label="Joystick de pan/tilt">
+            <div class="ring"></div>
+            <div class="knob" id="knob"></div>
+          </div>
+          <label class="grow">Zoom <span id="zoomVal">1.0×</span>
+            <input type="range" id="zoom" min="100" max="150" step="1">
+          </label>
+          <label class="grow">Velocidade máx. <span id="speedVal">60°/s</span>
+            <input type="range" id="speed" min="10" max="240" step="5" value="60">
+          </label>
+          <div class="pos">
+            <div>Pan <b id="panVal">–</b> · Tilt <b id="tiltVal">–</b></div>
+            <button id="center">Centralizar <kbd>C</kbd></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="map" id="map" title="Clique para apontar">
+        <div class="map-home"></div>
+        <div class="map-dot" id="mapDot"></div>
+      </div>
+
+      <div class="presets" id="presets"></div>
+      <p class="hint">Setas ou WASD movem · <kbd>Shift</kbd> rápido · <kbd>Q</kbd>/<kbd>E</kbd> ou roda do mouse: zoom · <kbd>1</kbd>–<kbd>4</kbd> preset · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>4</kbd> salva · <kbd>T</kbd> tracking · <kbd>P</kbd> privacidade</p>
+    </section>
+
+    <section class="side">
+      <h2>Geral</h2>
+      <label class="toggle"><input type="checkbox" id="autostart"><span>Iniciar com o sistema (no tray)</span></label>
+      <div class="field">
+        <span>Câmeras conectadas</span>
+        <ul class="cams" id="cams"></ul>
+      </div>
+
+      <h2>Vídeo</h2>
+      <div class="field">
+        <span>Resolução</span>
+        <select id="videoRes"></select>
+      </div>
+      <div class="field">
+        <span>FPS</span>
+        <select id="videoFps"></select>
+      </div>
+      <p class="sub" id="videoNote"></p>
+
+      <h2>Câmera virtual</h2>
+      <label class="toggle"><input type="checkbox" id="blur"><span>Fundo desfocado</span></label>
+      <p class="sub" id="blurStatus">Iniciando a câmera virtual…</p>
+      <div class="slider">
+        <div class="lbl"><span>Intensidade do desfoque</span><b id="blurAmountVal"></b></div>
+        <input type="range" id="blurAmount" min="2" max="60" step="1">
+      </div>
+      <div class="slider">
+        <div class="lbl"><span>Recorte</span><b id="blurEdgeVal"></b></div>
+        <input type="range" id="blurEdge" min="0.2" max="0.85" step="0.05">
+        <div class="lbl hint-row"><small>leva mais do entorno</small><small>mais justo em você</small></div>
+      </div>
+
+      <h2>Atalhos globais</h2>
+      <div id="shortcuts" class="shortcuts"></div>
+      <p class="sub">Funcionam com o app no tray. Clique e pressione a combinação; Esc cancela, Backspace remove.</p>
+
+      <h2>Câmera</h2>
+      <div class="field">
+        <span>Alvo do tracking</span>
+        <select id="target">
+          <option value="auto">Automático</option>
+          <option value="face">Rosto</option>
+          <option value="upper-body">Meio corpo</option>
+        </select>
+      </div>
+      <label class="toggle"><input type="checkbox" id="gesture"><span>Controle por gestos</span></label>
+      <label class="toggle"><input type="checkbox" id="hflip"><span>Espelhar horizontal</span></label>
+      <label class="toggle"><input type="checkbox" id="vflip"><span>Espelhar vertical</span></label>
+      <label class="toggle"><input type="checkbox" id="autorotate"><span>Girar se de cabeça para baixo</span></label>
+      <div class="field">
+        <span>Áudio</span>
+        <select id="audio">
+          <option value="nc">Cancelamento de ruído</option>
+          <option value="live">Live</option>
+          <option value="original">Original</option>
+        </select>
+      </div>
+      <div class="field">
+        <span>Auto-privacidade <small>(experimental)</small></span>
+        <select id="privacyDelay">
+          <option value="0">Nunca</option>
+          <option value="10">10 s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+        </select>
+      </div>
+
+      <h2>Imagem <button class="link" id="resetImage">restaurar padrão</button></h2>
+      <div id="image"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="renderer.js"></script>
+</body>
+</html>
